@@ -1,0 +1,231 @@
+name: Build Rich Pocket macOS and Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rich-pocket-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_VERSION: "0.1.0"
+  DUCK_LICENSE_API_URL: ${{ vars.DUCK_LICENSE_API_URL || 'https://rainlinemusic.su/api/v1/activate' }}
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUCE 8.0.4
+        run: |
+          curl -fL https://github.com/juce-framework/JUCE/releases/download/8.0.4/juce-8.0.4-osx.zip -o juce.zip
+          unzip -q juce.zip
+
+      - name: DSP regression tests
+        run: |
+          c++ -std=c++17 -O2 Tests/rich_dsp_test.cpp -o rich_dsp_test
+          ./rich_dsp_test
+
+      - name: Configure universal build
+        run: cmake -S . -B build -G Xcode -DJUCE_DIR="$PWD/JUCE" -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DDUCK_LICENSE_API_URL="$DUCK_LICENSE_API_URL" -DDUCK_ENABLE_OPENGL=ON -DDUCK_BUILD_UI_TESTS=ON -DDUCK_ENABLE_CLAP=ON -DRICH_ENABLE_LICENSE=OFF
+
+      - name: Build VST3, AU, CLAP and AAX
+        run: cmake --build build --config Release --target RichPocket_VST3 RichPocket_AAX RichPocket_AU RichPocket_CLAP RichDSPTest RichIntegrationTest
+
+      - name: Run all regression tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture three themes at three editor sizes
+        run: build/RichIntegrationTest_artefacts/Release/RichIntegrationTest "$PWD/ui-captures"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-captures-macos
+          path: ui-captures
+
+      - name: Import Apple Developer ID certificate
+        id: apple-signing
+        shell: bash
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" || -z "$MACOS_CERTIFICATE_PASSWORD" || -z "$MACOS_SIGNING_IDENTITY" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "No Apple certificate secrets: using ad-hoc signatures."
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/duck-pocket.keychain-db"
+          KEYCHAIN_PASSWORD="${MACOS_KEYCHAIN_PASSWORD:-temporary-password}"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/developer-id.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and inspect macOS plug-ins
+        shell: bash
+        run: |
+          VST3="build/RichPocket_artefacts/Release/VST3/Rich Pocket.vst3"
+          AAX="build/RichPocket_artefacts/Release/AAX/Rich Pocket.aaxplugin"
+          if [[ "${{ steps.apple-signing.outputs.enabled }}" == "true" ]]; then
+            codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$VST3"
+            codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$AAX"
+          else
+            codesign --force --deep --sign - "$VST3"
+            codesign --force --deep --sign - "$AAX"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$VST3"
+          codesign --verify --deep --strict --verbose=2 "$AAX"
+          lipo "$VST3/Contents/MacOS/Rich Pocket" -verify_arch arm64 x86_64
+          lipo "$AAX/Contents/MacOS/Rich Pocket" -verify_arch arm64 x86_64
+
+      - name: Sign AU and CLAP
+        shell: bash
+        run: |
+          for bundle in "build/RichPocket_artefacts/Release/AU/Rich Pocket.component" "build/RichPocket_artefacts/Release/CLAP/Rich Pocket.clap"; do
+            if [[ "${{ steps.apple-signing.outputs.enabled }}" == "true" ]]; then
+              codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$bundle"
+            else
+              codesign --force --deep --sign - "$bundle"
+            fi
+            codesign --verify --deep --strict "$bundle"
+          done
+
+      # Apple notarization is performed locally after downloading signed bundles.
+
+      - name: Validate macOS VST3
+        run: |
+          set -o pipefail
+          curl -fL https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip -o pluginval.zip
+          unzip -q pluginval.zip
+          chmod +x pluginval.app/Contents/MacOS/pluginval
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "$PWD/build/RichPocket_artefacts/Release/VST3/Rich Pocket.vst3" 2>&1 | tee pluginval-macos.log
+
+      - name: Archive macOS AU and CLAP
+        run: |
+          mkdir -p additional-formats
+          ditto -c -k --keepParent "build/RichPocket_artefacts/Release/AU/Rich Pocket.component" "additional-formats/RichPocket-${PLUGIN_VERSION}-macOS-AU.zip"
+          ditto -c -k --keepParent "build/RichPocket_artefacts/Release/CLAP/Rich Pocket.clap" "additional-formats/RichPocket-${PLUGIN_VERSION}-macOS-CLAP.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-macOS-AU-CLAP
+          path: additional-formats/*
+          if-no-files-found: error
+
+      - name: Package macOS plug-ins
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "build/RichPocket_artefacts/Release/VST3/Rich Pocket.vst3" "RichPocket-v${PLUGIN_VERSION}-macOS-Universal-VST3.zip"
+          ditto -c -k --sequesterRsrc --keepParent "build/RichPocket_artefacts/Release/AAX/Rich Pocket.aaxplugin" "RichPocket-v${PLUGIN_VERSION}-macOS-Universal-AAX-Developer.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-v0.1.0-macOS-Universal-VST3
+          path: RichPocket-v0.1.0-macOS-Universal-VST3.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-v0.1.0-macOS-Universal-AAX-Developer
+          path: RichPocket-v0.1.0-macOS-Universal-AAX-Developer.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-log-macos
+          path: pluginval-macos.log
+          if-no-files-found: ignore
+
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUCE 8.0.4
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.4.zip -OutFile juce.zip
+          Expand-Archive juce.zip -DestinationPath juce-unpack
+          Move-Item juce-unpack/JUCE-8.0.4 JUCE
+
+      - name: Configure x64 build
+        run: cmake -S . -B build -A x64 -DDUCK_LICENSE_API_URL="$env:DUCK_LICENSE_API_URL" -DJUCE_DIR="${{ github.workspace }}/JUCE" -DDUCK_ENABLE_OPENGL=ON -DDUCK_BUILD_UI_TESTS=ON -DDUCK_ENABLE_CLAP=ON -DRICH_ENABLE_LICENSE=OFF
+
+      - name: Build VST3, AAX and Rich tests
+        run: cmake --build build --config Release --target RichPocket_VST3 RichPocket_AAX RichPocket_CLAP RichDSPTest RichIntegrationTest
+
+      - name: Run all regression tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture three themes at three editor sizes
+        shell: pwsh
+        run: |
+          & "./build/RichIntegrationTest_artefacts/Release/RichIntegrationTest.exe" "$PWD/ui-captures"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-captures-windows
+          path: ui-captures
+
+      - name: Validate Windows VST3
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval-unpack
+          $validator = (Get-ChildItem pluginval-unpack -Recurse -Filter pluginval.exe | Select-Object -First 1).FullName
+          if (-not $validator) { throw "pluginval executable not found" }
+          & $validator --strictness-level 5 --validate "$PWD/build/RichPocket_artefacts/Release/VST3/Rich Pocket.vst3" 2>&1 | Tee-Object -FilePath pluginval-windows.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Archive Windows CLAP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force additional-formats | Out-Null
+          Compress-Archive -Path "build/RichPocket_artefacts/Release/CLAP/*" -DestinationPath "additional-formats/RichPocket-${env:PLUGIN_VERSION}-Windows-CLAP.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-Windows-CLAP
+          path: additional-formats/*
+          if-no-files-found: error
+
+      - name: Package Windows plug-ins
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/RichPocket_artefacts/Release/VST3/Rich Pocket.vst3" -DestinationPath "RichPocket-v${env:PLUGIN_VERSION}-Windows-x64-VST3.zip"
+          Compress-Archive -Path "build/RichPocket_artefacts/Release/AAX/Rich Pocket.aaxplugin" -DestinationPath "RichPocket-v${env:PLUGIN_VERSION}-Windows-x64-AAX-Developer.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-v0.1.0-Windows-x64-VST3
+          path: RichPocket-v0.1.0-Windows-x64-VST3.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RichPocket-v0.1.0-Windows-x64-AAX-Developer
+          path: RichPocket-v0.1.0-Windows-x64-AAX-Developer.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-log-windows
+          path: pluginval-windows.log
+          if-no-files-found: ignore
+
