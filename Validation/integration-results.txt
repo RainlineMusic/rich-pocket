@@ -1,0 +1,6 @@
+warm H2: -25.9715 dBc
+body H3: -33.6354 dBc
+silk H3: -28.6034 dBc
+air H3: -31.55 dBc
+Combined H2: -28.9625 dBc
+Rich integration and UI checks passed

@@ -1,0 +1,268 @@
+name: Build Duck Pocket macOS and Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, Release-1.0, feature/v1.0.0-duck-pocket, feature/duck-ui-percent-duration, feature/duck-license-sidechain]
+  pull_request:
+    branches: [main, Release-1.0]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: duck-pocket-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_VERSION: "1.0.1"
+  DUCK_LICENSE_API_URL: ${{ vars.DUCK_LICENSE_API_URL || 'https://rainlinemusic.su/api/v1/activate' }}
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUCE 8.0.4
+        run: |
+          curl -fL https://github.com/juce-framework/JUCE/releases/download/8.0.4/juce-8.0.4-osx.zip -o juce.zip
+          unzip -q juce.zip
+
+      - name: DSP regression tests
+        run: |
+          c++ -std=c++17 -O2 Tests/v10_test.cpp -o v10_test
+          ./v10_test
+
+      - name: Configure universal build
+        run: cmake -S . -B build -G Xcode -DJUCE_DIR="$PWD/JUCE" -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DDUCK_LICENSE_API_URL="$DUCK_LICENSE_API_URL" -DDUCK_ENABLE_OPENGL=ON -DDUCK_BUILD_UI_TESTS=ON
+
+      - name: Build VST3, AU, CLAP and AAX
+        run: cmake --build build --config Release --target DuckPocket_VST3 DuckPocket_AAX DuckPocket_AU DuckPocket_CLAP PocketLicenseTest PocketV10Test PocketShortDurationTest Pocket_numerical Pocket_relative_duration Pocket_null Pocket_mix_attack Pocket_lookahead PocketProcessorTest PocketUITest
+
+      - name: Run all regression tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture four themes at 1x and 2x
+        run: build/PocketUITest_artefacts/Release/PocketUITest "$PWD/ui-captures"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-captures-macos
+          path: ui-captures
+
+      - name: Import Apple Developer ID certificate
+        id: apple-signing
+        shell: bash
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" || -z "$MACOS_CERTIFICATE_PASSWORD" || -z "$MACOS_SIGNING_IDENTITY" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "No Apple certificate secrets: using ad-hoc signatures."
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/duck-pocket.keychain-db"
+          KEYCHAIN_PASSWORD="${MACOS_KEYCHAIN_PASSWORD:-temporary-password}"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/developer-id.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and inspect macOS plug-ins
+        shell: bash
+        run: |
+          VST3="build/DuckPocket_artefacts/Release/VST3/Duck Pocket.vst3"
+          AAX="build/DuckPocket_artefacts/Release/AAX/Duck Pocket.aaxplugin"
+          if [[ "${{ steps.apple-signing.outputs.enabled }}" == "true" ]]; then
+            codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$VST3"
+            codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$AAX"
+          else
+            codesign --force --deep --sign - "$VST3"
+            codesign --force --deep --sign - "$AAX"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$VST3"
+          codesign --verify --deep --strict --verbose=2 "$AAX"
+          lipo "$VST3/Contents/MacOS/Duck Pocket" -verify_arch arm64 x86_64
+          lipo "$AAX/Contents/MacOS/Duck Pocket" -verify_arch arm64 x86_64
+
+      - name: Sign AU and CLAP
+        shell: bash
+        run: |
+          for bundle in "build/DuckPocket_artefacts/Release/AU/Duck Pocket.component" "build/DuckPocket_artefacts/Release/CLAP/Duck Pocket.clap"; do
+            if [[ "${{ steps.apple-signing.outputs.enabled }}" == "true" ]]; then
+              codesign --force --deep --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$bundle"
+            else
+              codesign --force --deep --sign - "$bundle"
+            fi
+            codesign --verify --deep --strict "$bundle"
+          done
+
+      # Apple notarization is performed locally after downloading signed bundles.
+
+      - name: Validate macOS VST3
+        run: |
+          set -o pipefail
+          curl -fL https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip -o pluginval.zip
+          unzip -q pluginval.zip
+          chmod +x pluginval.app/Contents/MacOS/pluginval
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "$PWD/build/DuckPocket_artefacts/Release/VST3/Duck Pocket.vst3" 2>&1 | tee pluginval-macos.log
+
+      - name: Archive macOS AU and CLAP
+        run: |
+          mkdir -p additional-formats
+          ditto -c -k --keepParent "build/DuckPocket_artefacts/Release/AU/Duck Pocket.component" "additional-formats/DuckPocket-${PLUGIN_VERSION}-macOS-AU.zip"
+          ditto -c -k --keepParent "build/DuckPocket_artefacts/Release/CLAP/Duck Pocket.clap" "additional-formats/DuckPocket-${PLUGIN_VERSION}-macOS-CLAP.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-macOS-AU-CLAP
+          path: additional-formats/*
+          if-no-files-found: error
+
+      - name: Package macOS plug-ins
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "build/DuckPocket_artefacts/Release/VST3/Duck Pocket.vst3" "DuckPocket-v${PLUGIN_VERSION}-macOS-Universal-VST3.zip"
+          ditto -c -k --sequesterRsrc --keepParent "build/DuckPocket_artefacts/Release/AAX/Duck Pocket.aaxplugin" "DuckPocket-v${PLUGIN_VERSION}-macOS-Universal-AAX-Developer.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-v1.0.1-macOS-Universal-VST3
+          path: DuckPocket-v1.0.1-macOS-Universal-VST3.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-v1.0.1-macOS-Universal-AAX-Developer
+          path: DuckPocket-v1.0.1-macOS-Universal-AAX-Developer.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-log-macos
+          path: pluginval-macos.log
+          if-no-files-found: ignore
+
+      - name: Probe native OpenGL and 100 editor peer lifecycles
+        continue-on-error: true # Hosted macOS runners may lack a usable GPU/context.
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -c 'import subprocess,sys; result=subprocess.run(sys.argv[1:],capture_output=True,text=True,timeout=300); print(result.stdout,end=""); print(result.stderr,end="",file=sys.stderr); sys.exit(result.returncode)' build/PocketUITest_artefacts/Release/PocketUITest --gl-smoke 2>&1 | tee native-gl-macos.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-gl-log-macos
+          path: native-gl-macos.log
+          if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUCE 8.0.4
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.4.zip -OutFile juce.zip
+          Expand-Archive juce.zip -DestinationPath juce-unpack
+          Move-Item juce-unpack/JUCE-8.0.4 JUCE
+
+      - name: Configure x64 build
+        run: cmake -S . -B build -A x64 -DDUCK_LICENSE_API_URL="$env:DUCK_LICENSE_API_URL" -DJUCE_DIR="${{ github.workspace }}/JUCE" -DDUCK_ENABLE_OPENGL=ON -DDUCK_BUILD_UI_TESTS=ON
+
+      - name: Build VST3, AAX and DSP tests
+        run: cmake --build build --config Release --target DuckPocket_VST3 DuckPocket_AAX DuckPocket_CLAP PocketLicenseTest PocketV10Test PocketShortDurationTest Pocket_numerical Pocket_relative_duration Pocket_null Pocket_mix_attack Pocket_lookahead PocketProcessorTest PocketUITest
+
+      - name: Run all regression tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Capture four themes at 1x and 2x
+        shell: pwsh
+        run: |
+          & "./build/PocketUITest_artefacts/Release/PocketUITest.exe" "$PWD/ui-captures"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-captures-windows
+          path: ui-captures
+
+      - name: Validate Windows VST3
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval-unpack
+          $validator = (Get-ChildItem pluginval-unpack -Recurse -Filter pluginval.exe | Select-Object -First 1).FullName
+          if (-not $validator) { throw "pluginval executable not found" }
+          & $validator --strictness-level 5 --validate "$PWD/build/DuckPocket_artefacts/Release/VST3/Duck Pocket.vst3" 2>&1 | Tee-Object -FilePath pluginval-windows.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Archive Windows CLAP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force additional-formats | Out-Null
+          Compress-Archive -Path "build/DuckPocket_artefacts/Release/CLAP/*" -DestinationPath "additional-formats/DuckPocket-${env:PLUGIN_VERSION}-Windows-CLAP.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-Windows-CLAP
+          path: additional-formats/*
+          if-no-files-found: error
+
+      - name: Package Windows plug-ins
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/DuckPocket_artefacts/Release/VST3/Duck Pocket.vst3" -DestinationPath "DuckPocket-v${env:PLUGIN_VERSION}-Windows-x64-VST3.zip"
+          Compress-Archive -Path "build/DuckPocket_artefacts/Release/AAX/Duck Pocket.aaxplugin" -DestinationPath "DuckPocket-v${env:PLUGIN_VERSION}-Windows-x64-AAX-Developer.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-v1.0.1-Windows-x64-VST3
+          path: DuckPocket-v1.0.1-Windows-x64-VST3.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DuckPocket-v1.0.1-Windows-x64-AAX-Developer
+          path: DuckPocket-v1.0.1-Windows-x64-AAX-Developer.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-log-windows
+          path: pluginval-windows.log
+          if-no-files-found: ignore
+
+      - name: Verify 100 native Windows editor peers without OpenGL
+        shell: pwsh
+        run: |
+          $out = "$PWD/native-gl-windows.stdout.log"
+          $err = "$PWD/native-gl-windows.stderr.log"
+          'GL_PROBE_WRAPPER_START' | Set-Content native-gl-windows.log
+          $probe = Start-Process -FilePath "./build/PocketUITest_artefacts/Release/PocketUITest.exe" -ArgumentList '--gl-smoke' -WorkingDirectory "$PWD" -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+          if ($null -eq $probe) { 'PROCESS_START_FAILED' | Add-Content native-gl-windows.log; exit 1 }
+          if (-not $probe.WaitForExit(300000)) {
+            Stop-Process -Id $probe.Id -Force
+            'TIMEOUT: native Windows peer probe exceeded 300 seconds' | Add-Content native-gl-windows.log
+            exit 124
+          }
+          Get-Content $out, $err | Tee-Object -FilePath native-gl-windows.log -Append
+          "GL_PROBE_EXIT_CODE=$($probe.ExitCode)" | Tee-Object -FilePath native-gl-windows.log -Append
+          if ($probe.ExitCode -ne 0) { exit $probe.ExitCode }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-gl-log-windows
+          path: native-gl-windows.log
+          if-no-files-found: ignore
+

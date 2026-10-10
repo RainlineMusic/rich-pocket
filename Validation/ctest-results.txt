@@ -1,0 +1,9 @@
+Test project /workspace/scratch/39f2e8077acb/work/rich-build-make
+    Start 1: RichDSP
+1/2 Test #1: RichDSP ..........................   Passed    0.29 sec
+    Start 2: RichIntegration
+2/2 Test #2: RichIntegration ..................   Passed    1.54 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =   1.84 sec
