@@ -129,7 +129,8 @@ void DuckPocketAudioProcessor::processAudio(juce::AudioBuffer<float>& buffer,juc
             for(int ch=0;ch<channels;++ch){
                 const float original=dry.getSample(ch,n);
                 const float processed=(base.getSample(ch,n)+work.getSample(ch,n))*output;
-                const float y=original+wet*(processed-original);
+                // Exact settled bypass and wet endpoints; blend only during ramps.
+                const float y=wet<=0.f?original:(wet>=1.f?processed:original+wet*(processed-original));
                 buffer.setSample(ch,offset+n,y);
                 if(ch==0){inLo=inHi=original;outLo=outHi=y;}else{inLo=juce::jmin(inLo,original);inHi=juce::jmax(inHi,original);outLo=juce::jmin(outLo,y);outHi=juce::jmax(outHi,y);}
                 activity=juce::jmax(activity,juce::jlimit(0.f,1.f,std::abs(work.getSample(ch,n))*wet));

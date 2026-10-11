@@ -87,6 +87,9 @@ public:
         s.tintLow=lowPole*s.tintLow+(1.-lowPole)*coloured;
         s.tintHigh=highPole*s.tintHigh+(1.-highPole)*coloured;
         // Shared +/-1.5 dB shelf asymptote budget, including combined settings.
+        // Avoid cancellation/FMA roundoff injecting a tiny wet signal when
+        // every colour and the residual DC tail are exactly zero.
+        if(a==0. && b==0. && c==0. && d==0. && residual==0.)return float(x);
         const double sum=std::max(1.,a+b+c+d);
         const double lowDb=(a+.45*b-.20*d)/sum;
         const double highDb=(-.65*c+1.5*d-.20*a)/sum;

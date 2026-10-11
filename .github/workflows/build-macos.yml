@@ -48,13 +48,10 @@ jobs:
       - name: Run all regression tests
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Capture three themes at three editor sizes
-        run: build/RichIntegrationTest_artefacts/Release/RichIntegrationTest "$PWD/ui-captures"
-
       - uses: actions/upload-artifact@v4
         with:
           name: ui-captures-macos
-          path: ui-captures
+          path: build/ui-captures
 
       - name: Import Apple Developer ID certificate
         id: apple-signing
@@ -152,7 +149,9 @@ jobs:
         if: always()
         with:
           name: validation-log-macos
-          path: pluginval-macos.log
+          path: |
+            pluginval-macos.log
+            build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 
 
@@ -178,16 +177,10 @@ jobs:
       - name: Run all regression tests
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Capture three themes at three editor sizes
-        shell: pwsh
-        run: |
-          & "./build/RichIntegrationTest_artefacts/Release/RichIntegrationTest.exe" "$PWD/ui-captures"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - uses: actions/upload-artifact@v4
         with:
           name: ui-captures-windows
-          path: ui-captures
+          path: build/ui-captures
 
       - name: Validate Windows VST3
         shell: pwsh
@@ -231,6 +224,8 @@ jobs:
         if: always()
         with:
           name: validation-log-windows
-          path: pluginval-windows.log
+          path: |
+            pluginval-windows.log
+            build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 

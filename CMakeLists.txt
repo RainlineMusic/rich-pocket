@@ -86,7 +86,7 @@ if(DUCK_BUILD_UI_TESTS)
  if(DUCK_ENABLE_OPENGL)
   target_link_libraries(RichIntegrationTest PRIVATE juce::juce_opengl)
  endif()
- add_test(NAME RichIntegration COMMAND RichIntegrationTest)
+ add_test(NAME RichIntegration COMMAND RichIntegrationTest "${CMAKE_CURRENT_BINARY_DIR}/ui-captures")
 endif()
 # Carry the embedded-font license in every delivered plug-in bundle, before
 # CI signs/notarises it. Fonts remain embedded; only the license is copied.

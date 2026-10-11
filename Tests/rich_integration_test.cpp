@@ -15,13 +15,14 @@ struct DuckUiTestAccess {
 void check(bool ok,const char* msg){if(!ok){std::cerr<<"FAIL: "<<msg<<'\n';std::exit(1);}}
 void set(DuckPocketAudioProcessor& p,const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));}
 int main(int argc,char** argv){
+ std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
  juce::ScopedJuceInitialiser_GUI gui;
  DuckPocketAudioProcessor p;check(p.isActivated(),"development authorization disabled");
  const char* colours[]{"warm","body","silk","air"};
  for(double rate:{44100.,48000.,96000.,192000.}){
   p.prepareToPlay(rate,64);int latency=p.getLatencySamples();check(latency>=0&&latency<128,"oversampling latency");
   juce::AudioBuffer<float> b(2,257);juce::MidiBuffer midi;std::vector<float> input;
-  for(int block=0;block<4;++block){for(int n=0;n<257;++n){float v=float(std::sin((block*257+n)*.17)*.8);input.push_back(v);b.setSample(0,n,v);b.setSample(1,n,v);}p.processBlock(b,midi);for(int n=0;n<257;++n){int source=block*257+n-latency;float expected=source>=0?input[size_t(source)]:0.f;check(b.getSample(0,n)==expected,"zero colours sample exact with latency and oversized blocks");}}
+  for(int block=0;block<4;++block){for(int n=0;n<257;++n){float v=float(std::sin((block*257+n)*.17)*.8);input.push_back(v);b.setSample(0,n,v);b.setSample(1,n,v);}p.processBlock(b,midi);for(int n=0;n<257;++n){int source=block*257+n-latency;float expected=source>=0?input[size_t(source)]:0.f;if(b.getSample(0,n)!=expected)std::cerr<<"Dry mismatch: rate="<<rate<<" index="<<block*257+n<<" latency="<<latency<<" expected="<<std::hexfloat<<expected<<" actual="<<b.getSample(0,n)<<std::defaultfloat<<"\n";check(b.getSample(0,n)==expected,"zero colours sample exact with latency and oversized blocks");}}
   for(auto* id:colours)set(p,id,100);
   for(int block=0;block<30;++block){for(int n=0;n<257;++n){float v=float(std::sin((block*257+n)*.07)*4.);b.setSample(0,n,v);b.setSample(1,n,v);}p.processBlock(b,midi);for(int n=0;n<257;++n){check(std::isfinite(b.getSample(0,n)),"finite full colours");check(b.getSample(0,n)==b.getSample(1,n),"stereo identity");}}
   for(auto* id:colours)set(p,id,0);
@@ -49,7 +50,7 @@ int main(int argc,char** argv){
  set(p,"inputGain",6);set(p,"outputGain",-3);juce::MemoryBlock state;p.getStateInformation(state);DuckPocketAudioProcessor restored;restored.setStateInformation(state.getData(),int(state.getSize()));check(restored.parameters.getRawParameterValue("inputGain")->load()==6,"input state");check(restored.parameters.getRawParameterValue("outputGain")->load()==-3,"output state");
  set(p,"inputGain",0);set(p,"outputGain",0);for(int i=0;i<4;++i)set(p,colours[i],float(25+i*15));
  p.prepareToPlay(48000.,128);std::unique_ptr<DuckPocketAudioProcessorEditor> editor(static_cast<DuckPocketAudioProcessorEditor*>(p.createEditor()));
- juce::File output(argc>1?argv[1]:"/tmp/rich-ui-captures");output.createDirectory();
+ juce::File output=argc>1?juce::File(argv[1]):juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("rich-ui-captures");check(output.createDirectory().wasOk(),"create UI capture directory");std::cout<<"UI captures: "<<output.getFullPathName()<<"\n";
  const char* themes[]{"dark","neon","amber"};PocketTheme values[]{PocketTheme::SolidDark,PocketTheme::Neon,PocketTheme::Amber};
  for(int t=0;t<3;++t){DuckUiTestAccess::theme(*editor,values[t]);for(int width:{400,800,1200}){editor->setSize(width,juce::roundToInt(width*792./800.));check(DuckUiTestAccess::layout(*editor),"six dials fit without overlap");auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);auto stream=output.getChildFile(juce::String(themes[t])+"-"+juce::String(width)+".png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"UI capture");}}
  set(p,"bypass",1);juce::AudioBuffer<float> b(2,128);for(int block=0;block<40;++block){b.clear();p.processBlock(b,midi);}DuckUiTestAccess::tick(*editor);
