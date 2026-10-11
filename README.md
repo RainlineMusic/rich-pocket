@@ -32,7 +32,7 @@ tables or buffers. The processor supports mono/stereo, oversize host blocks,
 parameter smoothing, click-free bypass and state recall. It processes at fixed
 8× oversampling with JUCE's high-quality polyphase IIR filters, reporting integer
 latency to the host. Only the residual is oversampled: with all colours at zero,
-unity Input/Output reproduces the exact original samples after the reported delay.
+unity Input/Output reproduces the original samples within float rounding precision after the reported delay.
 
 `Source/RichDSP.h` contains all curve equations and blend coefficients.
 Wright omega solves `w + ln(w) = z`. Warm uses the normalized asymmetric curve
