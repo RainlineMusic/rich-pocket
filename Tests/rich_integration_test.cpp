@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "PocketSnapshot.h"
 #include <iostream>
 #include <cstdlib>
 #include <vector>
@@ -52,8 +53,8 @@ int main(int argc,char** argv){
  p.prepareToPlay(48000.,128);std::unique_ptr<DuckPocketAudioProcessorEditor> editor(static_cast<DuckPocketAudioProcessorEditor*>(p.createEditor()));
  juce::File output=argc>1?juce::File(argv[1]):juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("rich-ui-captures");check(output.createDirectory().wasOk(),"create UI capture directory");std::cout<<"UI captures: "<<output.getFullPathName()<<"\n";
  const char* themes[]{"dark","neon","amber"};PocketTheme values[]{PocketTheme::SolidDark,PocketTheme::Neon,PocketTheme::Amber};
- for(int t=0;t<3;++t){DuckUiTestAccess::theme(*editor,values[t]);for(int width:{400,800,1200}){editor->setSize(width,juce::roundToInt(width*792./800.));check(DuckUiTestAccess::layout(*editor),"six dials fit without overlap");auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);auto stream=output.getChildFile(juce::String(themes[t])+"-"+juce::String(width)+".png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"UI capture");}}
+ for(int t=0;t<3;++t){DuckUiTestAccess::theme(*editor,values[t]);for(int width:{400,800,1200}){editor->setSize(width,juce::roundToInt(width*792./800.));check(DuckUiTestAccess::layout(*editor),"six dials fit without overlap");auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());auto stream=output.getChildFile(juce::String(themes[t])+"-"+juce::String(width)+".png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"UI capture");}}
  set(p,"bypass",1);juce::AudioBuffer<float> b(2,128);for(int block=0;block<40;++block){b.clear();p.processBlock(b,midi);}DuckUiTestAccess::tick(*editor);
- {auto image=editor->createComponentSnapshot(editor->getLocalBounds(),true,1.f);auto stream=output.getChildFile("bypass.png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"bypass capture");}
+ {auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());auto stream=output.getChildFile("bypass.png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"bypass capture");}
  std::cout<<"Rich integration and UI checks passed\n";
 }

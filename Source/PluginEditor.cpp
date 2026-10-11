@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "PocketSnapshot.h"
 namespace {
 juce::ColourGradient traceFade(juce::Colour colour){return {colour.withMultipliedAlpha(.08f),50.f,0.f,colour,750.f,0.f,false};}
 juce::Font uiFont(float size){return pocketFont(size);}
@@ -650,7 +651,7 @@ void DuckPocketAudioProcessorEditor::paint(juce::Graphics& g){
 void DuckPocketAudioProcessorEditor::captureBlurSnapshot(){
     if(capturingBlur||blurArea.isEmpty())return;
     capturingBlur=true;const float old=bypassMix;bypassMix=0;
-    auto source=createComponentSnapshot(blurArea,true,1.f);
+    auto source=pocket::softwareSnapshot(*this,blurArea,1.f);
     bypassMix=old;capturingBlur=false;
     if(!source.isValid()||source.getWidth()<8||source.getHeight()<8)return;
     const int w=juce::jmax(16,source.getWidth()/2),h=juce::jmax(16,source.getHeight()/2);
@@ -680,7 +681,7 @@ void DuckPocketAudioProcessorEditor::captureActivationBackdrop(){
     // focus intact while the background is captured on the message thread.
     const auto oldAlpha=activationPanel.getAlpha();const float oldMix=bypassMix;
     activationPanel.setOpaque(false);activationPanel.setAlpha(0);capturingBlur=true;bypassMix=0;
-    auto source=createComponentSnapshot(getLocalBounds(),true,.5f);
+    auto source=pocket::softwareSnapshot(*this,getLocalBounds(),.5f);
     bypassMix=oldMix;capturingBlur=false;activationPanel.setAlpha(oldAlpha);activationPanel.setOpaque(true);
     activationBackdropDirty=false;
     if(!source.isValid())return;

@@ -16,7 +16,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DuckPocketAudioProcessor::la
     juce::AudioProcessorValueTreeState::ParameterLayout result;
     constexpr const char* ids[]{"warm","body","silk","air"};constexpr const char* names[]{"Warm","Body","Silk","Air"};
     for(int i=0;i<4;++i)result.add(std::make_unique<juce::AudioParameterFloat>(ids[i],names[i],juce::NormalisableRange<float>(0.f,100.f,.1f),0.f));
-    result.add(std::make_unique<juce::AudioParameterFloat>("inputGain","Input",juce::NormalisableRange<float>(-12.f,12.f,.01f),0.f));
+    result.add(std::make_unique<juce::AudioParameterFloat>("inputGain","Input",juce::NormalisableRange<float>(-12.f,12.f),0.f));
     result.add(std::make_unique<juce::AudioParameterFloat>("outputGain","Output",juce::NormalisableRange<float>(-12.f,12.f,.01f),0.f));
     result.add(std::make_unique<juce::AudioParameterBool>("bypass","Bypass",false));
     return result;
