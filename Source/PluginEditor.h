@@ -202,7 +202,7 @@ private:
     std::vector<PocketTrace> frozenGain,frozenSummary;
     bool gainFrozen=false,scopeFrozen=false,filtersExpanded=false;
     static constexpr float expandedDesignHeight=905.f;
-    float designHeight() const{return filtersExpanded?expandedDesignHeight:792.f;}
+    float designHeight() const{return 320.f;}
     void setFiltersExpanded(bool expanded,bool persist=true);
     double gainResume=0,scopeResume=0;
     bool ready=false,rangeGesture=false,processRangeGesture=false,capturingBlur=false,bypassTarget=false;

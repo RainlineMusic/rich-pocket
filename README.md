@@ -1,9 +1,11 @@
 # Rich Pocket 0.1.0 — development prototype
 
 Built from the supplied Duck Pocket source, retaining the fonts, dial artwork,
-three themes, menu styling, bypass blur, renderer options, graph window/freeze,
+three themes, menu styling, bypass blur, host renderer options,
 resize behaviour and logo double-click sound. Four large colour controls have
 labels above them; Input and Output are smaller controls on the right.
+The editor is 800 × 320 at its default size, with no graphs or freeze control.
+Graph history capture and its menu entries are disabled.
 The obsolete Duck sidechain/filter/lookahead controls are hidden. Original
 processor, build configuration and documentation are preserved in `Legacy/`.
 

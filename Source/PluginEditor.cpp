@@ -181,7 +181,7 @@ DuckPocketAudioProcessorEditor::DuckPocketAudioProcessorEditor(DuckPocketAudioPr
     auto saved=preferences->getValue("richPocket.ui.theme",preferences->getValue("phasePocket.ui.theme","solidDark"));setTheme(saved=="neon"?PocketTheme::Neon:(saved=="amber"?PocketTheme::Amber:PocketTheme::SolidDark),false);
     gainWindow=preferences->getDoubleValue("richPocket.ui.graphWindow",preferences->getDoubleValue("richPocket.ui.gainWindow",preferences->getDoubleValue("phasePocket.ui.gainWindow",1.)));scopeWindow=gainWindow;
     setLookAndFeel(&look);setOpaque(true);setResizable(true,true);
-    for(auto* c:std::initializer_list<juce::Component*>{&influence,&duration,&attack,&midSide,&inputDial,&outputDial,&settingsButton,&bypassButton,&freezeButton})addAndMakeVisible(c);
+    for(auto* c:std::initializer_list<juce::Component*>{&influence,&duration,&attack,&midSide,&inputDial,&outputDial,&settingsButton,&bypassButton})addAndMakeVisible(c);
     influenceAttach=std::make_unique<SliderAttachment>(p.parameters,"warm",influence);
     durationAttach=std::make_unique<SliderAttachment>(p.parameters,"body",duration);
     silkAttach=std::make_unique<SliderAttachment>(p.parameters,"silk",attack);
@@ -192,9 +192,7 @@ DuckPocketAudioProcessorEditor::DuckPocketAudioProcessorEditor(DuckPocketAudioPr
     inputDial.setDoubleClickReturnValue(true,0);outputDial.setDoubleClickReturnValue(true,0);
     bypassButton.setClickingTogglesState(true);bypassAttach=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.parameters,"bypass",bypassButton);settingsButton.onClick=[this]{showSettingsMenu();};
     listenButton.setClickingTogglesState(true);listenButton.onClick=[this]{audioProcessor.listenSidechain.store(listenButton.getToggleState());};
-    // One button freezes and resumes both graphs at once.
-    freezeButton.setClickingTogglesState(true);
-    freezeButton.onClick=[this]{setFrozen(freezeButton.getToggleState());};
+    freezeButton.setVisible(false);
     filtersExpanded=false;
     expandButton.setVisible(false);listenButton.setVisible(false);
     int width=p.editorWidth.load();
@@ -236,12 +234,12 @@ DuckPocketAudioProcessorEditor::DuckPocketAudioProcessorEditor(DuckPocketAudioPr
     };
     setActivationMode(false);
     activationPanel.setVisible(!audioProcessor.isActivated());resized();
-    ready=true;p.editorWidth.store(width);PocketTrace discard;while(p.popTrace(discard)){}p.editorOpen.store(true);frameTick();
+    ready=true;p.editorWidth.store(width);PocketTrace discard;while(p.popTrace(discard)){}p.editorOpen.store(false);frameTick();
     // VBlank-driven rendering: long windows have a 30 fps budget; short
     // windows retain the 60 fps interaction rate.
     vblank=std::make_unique<juce::VBlankAttachment>(this,[this]{
         const double now=juce::Time::getMillisecondCounterHiRes();
-        const double minimumGap=gainWindow>=2.?1000./30.:1000./60.;
+        const double minimumGap=1000./60.;
         if(nextFrameMs>0&&now+.75<nextFrameMs)return;
         nextFrameMs=nextFrameMs>0&&now-nextFrameMs<minimumGap?nextFrameMs+minimumGap:now+minimumGap;
         frameTick();
@@ -297,7 +295,7 @@ void DuckPocketAudioProcessorEditor::setFrozen(bool frozen){
     freezeButton.setToggleState(frozen,juce::dontSendNotification);freezeButton.repaint();
     repaint(gainArea);repaint(scopeArea);
 }
-void DuckPocketAudioProcessorEditor::showSettingsMenu(){juce::PopupMenu root,window,theme;for(size_t i=0;i<windows.size();++i)window.addItem(int(i)+1,timeLabel(windows[i]),true,std::abs(gainWindow-windows[i])<1e-6);theme.addItem(201,"Neon",true,look.theme==PocketTheme::Neon);theme.addItem(204,"Amber",true,look.theme==PocketTheme::Amber);theme.addItem(202,"Solid Dark",true,look.theme==PocketTheme::SolidDark);root.addSubMenu("Graph window",window);root.addSeparator();root.addSubMenu("Theme",theme);
+void DuckPocketAudioProcessorEditor::showSettingsMenu(){juce::PopupMenu root,theme;theme.addItem(201,"Neon",true,look.theme==PocketTheme::Neon);theme.addItem(204,"Amber",true,look.theme==PocketTheme::Amber);theme.addItem(202,"Solid Dark",true,look.theme==PocketTheme::SolidDark);root.addSubMenu("Theme",theme);
 #if JUCE_WINDOWS
 juce::StringArray rendererNames;
 if(auto* peer=getPeer()){
@@ -311,7 +309,7 @@ if(auto* peer=getPeer()){
 juce::StringArray rendererNames;
 #endif
 #if DUCK_ENABLE_OPENGL && ! JUCE_WINDOWS
-root.addSeparator();root.addItem(401,"OpenGL (experimental)",true,glowRenderer!=nullptr);
+// No plot renderer is needed by the compact editor.
 #endif
 root.addSeparator();root.addItem(610,"Antialiasing: 8x",false,true);
 auto safe=juce::Component::SafePointer<DuckPocketAudioProcessorEditor>(this);root.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(settingsButton),[safe,rendererNames](int id){if(!safe||id==0)return;
@@ -321,7 +319,7 @@ if(id>=500&&id<500+rendererNames.size()){safe->setWindowsRenderer(rendererNames[
 #if DUCK_ENABLE_OPENGL && ! JUCE_WINDOWS
 if(id==401){safe->setOpenGL(safe->glowRenderer==nullptr);return;}
 #endif
-if(id>=1&&id<=6)safe->setHistoryWindow(windows[size_t(id-1)]);else if(id==201)safe->setTheme(PocketTheme::Neon);else if(id==204)safe->setTheme(PocketTheme::Amber);else if(id==202)safe->setTheme(PocketTheme::SolidDark);});}
+if(id==201)safe->setTheme(PocketTheme::Neon);else if(id==204)safe->setTheme(PocketTheme::Amber);else if(id==202)safe->setTheme(PocketTheme::SolidDark);});}
 void DuckPocketAudioProcessorEditor::syncDurationMode(){
     // Duck-only controls retained in the source, not used by Rich Pocket.
 }
@@ -344,10 +342,10 @@ void DuckPocketAudioProcessorEditor::mouseDoubleClick(const juce::MouseEvent& ev
 void DuckPocketAudioProcessorEditor::resized(){
     // Visual freeze bounds: (1830,1693,48,48) mapped from the 1894px reference.
     // A larger transparent hit box preserves clickability at compact sizes.
-    freezeButton.setBounds(scaled(766.98f,709.10f,32,32));settingsButton.setBounds(scaled(716,12,31,31));bypassButton.setBounds(scaled(755,12,31,31));
-    influence.setBounds(scaled(25,110,170,190));duration.setBounds(scaled(197,110,170,190));
-    attack.setBounds(scaled(369,110,170,190));midSide.setBounds(scaled(541,110,170,190));
-    inputDial.setBounds(scaled(713,70,82,90));outputDial.setBounds(scaled(713,220,82,90));
+    freezeButton.setVisible(false);freezeButton.setBounds(0,0,0,0);settingsButton.setBounds(scaled(716,12,31,31));bypassButton.setBounds(scaled(755,12,31,31));
+    influence.setBounds(scaled(25,88,170,190));duration.setBounds(scaled(197,88,170,190));
+    attack.setBounds(scaled(369,88,170,190));midSide.setBounds(scaled(541,88,170,190));
+    inputDial.setBounds(scaled(713,65,82,90));outputDial.setBounds(scaled(713,205,82,90));
     mix.setBounds(0,0,0,0);outputGain.setBounds(0,0,0,0);
     expandButton.setVisible(false);listenButton.setVisible(false);
     activationPanel.setBounds(getLocalBounds());
@@ -376,7 +374,7 @@ void DuckPocketAudioProcessorEditor::resized(){
     activationPanel.toFront(false);
     sidechainRange.setVisible(false);processingRange.setVisible(false);
     sidechainRange.setBounds(scaled(65,815,670,28));processingRange.setBounds(scaled(65,862,670,28));
-    blurArea=scaled(0,56,800,designHeight()-56).getIntersection(getLocalBounds());gainArea=scaled(32,396,752,160);scopeArea=scaled(32,583,752,160);
+    blurArea=scaled(0,56,800,designHeight()-56).getIntersection(getLocalBounds());gainArea={};scopeArea={};
     blurredSnapshot={};if(ready){
         audioProcessor.editorWidth.store(getWidth());
         // Height-only folds need no cache debounce. Real width changes still
@@ -540,57 +538,22 @@ void DuckPocketAudioProcessorEditor::graph(juce::Graphics& g,juce::Rectangle<flo
 }
 void DuckPocketAudioProcessorEditor::paintChrome(juce::Graphics& g){
     const float physicalScale=juce::jlimit(.75f,4.f,g.getInternalContext().getPhysicalPixelScaleFactor());
-    const int w=juce::jmax(1,juce::roundToInt(getWidth()*physicalScale)),h=juce::jmax(1,juce::roundToInt(expandedDesignHeight*float(getWidth())/800.f*physicalScale));
+    const int w=juce::jmax(1,juce::roundToInt(getWidth()*physicalScale)),h=juce::jmax(1,juce::roundToInt(designHeight()*float(getWidth())/800.f*physicalScale));
     const bool resizing=resizeStamp>0&&juce::Time::getMillisecondCounterHiRes()-resizeStamp<100;
     if((!chromeValid||!chrome.isValid()||chrome.getWidth()!=w||chrome.getHeight()!=h||std::abs(chromeScale-physicalScale)>.001f)&&(!resizing||!chrome.isValid())){
         ++chromeBuildCount;chrome=juce::Image(juce::Image::ARGB,w,h,true,juce::SoftwareImageType());chromeScale=physicalScale;juce::Graphics cg(chrome);cg.addTransform(juce::AffineTransform::scale(physicalScale*float(getWidth())/800.f));const auto t=look.tokens();
-        cg.setGradientFill(juce::ColourGradient(t.chassis,400,240,t.chassis.darker(.2f),0,expandedDesignHeight,true));cg.fillRect(0.f,0.f,800.f,expandedDesignHeight);
+        cg.setGradientFill(juce::ColourGradient(t.chassis,400,240,t.chassis.darker(.2f),0,designHeight(),true));cg.fillRect(0.f,0.f,800.f,designHeight());
 
-        juce::Random noise(0xD0C);for(int i=0;i<6500;++i){cg.setColour((i%2?juce::Colours::white:juce::Colours::black).withAlpha(.012f));cg.fillRect(float(noise.nextInt(800)),float(noise.nextInt(int(expandedDesignHeight))),1.f,1.f);}
+        juce::Random noise(0xD0C);for(int i=0;i<6500;++i){cg.setColour((i%2?juce::Colours::white:juce::Colours::black).withAlpha(.012f));cg.fillRect(float(noise.nextInt(800)),float(noise.nextInt(int(designHeight()))),1.f,1.f);}
         // Original Duck logo asset retained; Rich product title uses the embedded font.
         cg.setFont(pocketFont(27.f,true));cg.setColour(t.brand);cg.drawText("RICH POCKET",juce::Rectangle<float>{22,5,300,42},juce::Justification::centredLeft);
-        for(float y:{53.f,390.f,556.f,581.f,744.f}){
+        for(float y:{53.f}){
             cg.setColour(juce::Colours::black.withAlpha(.5f));cg.fillRect(0.f,y,800.f,3.f);
             cg.setColour(t.ink.withAlpha(.05f));cg.drawLine(0,y+3,800,y+3,.7f);
         }
-        auto frame=[&](juce::Rectangle<float> box,bool gain){
-            auto plot=juce::Rectangle<float>(box.getX()+18,box.getY()+27,box.getWidth()-52,box.getHeight()-53);
-            const auto recess=juce::Rectangle<float>{0,box.getY(),800,box.getHeight()};
-            const auto glass=t.glass.darker(.3f);
-            cg.setGradientFill(juce::ColourGradient(glass.brighter(.035f),0,recess.getY(),glass.darker(.18f),0,recess.getBottom(),false));cg.fillRect(recess);
-            // Cached inner bevel: the graph bed sits below the chassis.
-            cg.setGradientFill(juce::ColourGradient(juce::Colours::black.withAlpha(.7f),0,recess.getY(),juce::Colours::transparentBlack,0,recess.getY()+14,false));cg.fillRect(recess.withHeight(14));
-            cg.setColour(t.ink.withAlpha(.075f));cg.drawLine(0,recess.getBottom()-.5f,800,recess.getBottom()-.5f,.7f);
-            cg.setGradientFill(juce::ColourGradient(t.glass,plot.getX(),plot.getY(),glass,plot.getX(),plot.getBottom(),false));cg.fillRect(plot.expanded(8,0));
-            text(cg,gain?"COLOUR HISTORY":"OSCILLOSCOPE",{box.getX()+18,box.getY()+4,240,22},13,t.ink);
-            if(gain)text(cg,"COLOUR ACTIVITY",{box.getRight()-220,box.getY()+4,188,22},11,t.muted,juce::Justification::centredRight);
-            else {text(cg,"OUT",{box.getRight()-86,box.getY()+4,35,22},11,t.out);text(cg,"IN",{box.getRight()-48,box.getY()+4,35,22},11,t.key);}
-            const float top=plot.getY(),bottom=plot.getBottom(),midY=plot.getCentreY(),height=plot.getHeight(),left=plot.getX(),right=plot.getRight(),endS=height*.10f,ringS=height*.04f;
-            auto arc=[&](float cx,float bend){juce::Path path;path.startNewSubPath(cx,top);path.quadraticTo(cx+2*bend,midY,cx,bottom);stroke(cg,path,t.major,.8f);};
-            arc(left,-endS);arc(left,endS);arc(right,endS);arc(right,-endS);arc(left+plot.getWidth()*.25f,ringS);arc(left+plot.getWidth()*.75f,-ringS);
-            cg.setColour(t.major);cg.drawLine(plot.getCentreX(),top,plot.getCentreX(),bottom,.8f);cg.drawLine(left,top,right,top,.8f);cg.drawLine(left,bottom,right,bottom,.8f);
-            for(int i=1;i<4;++i){const float u=float(i)/4.f,y=top+u*height,offset=4*endS*u*(1-u);cg.setColour(t.major);cg.drawLine(left+offset,y,right-offset,y,.8f);}
-            cg.setGradientFill(juce::ColourGradient(t.glass.withAlpha(.22f),left,midY,t.glass.withAlpha(0.f),right,midY,false));cg.fillRect(plot);
-            text(cg,gain?"100%":"+1",{right+7,top-9,43,18},11,t.muted);
-            text(cg,gain?"0%":"-1",{right+7,bottom-9,43,18},11,t.muted);
-            const double window=gain?gainWindow:scopeWindow;text(cg,"-"+timeLabel(window),{left,box.getBottom()-24,140,20},11,t.muted);text(cg,"NOW",{right-80,box.getBottom()-24,80,20},11,t.muted,juce::Justification::centredRight);
-        };
-        frame({32,396,752,160},true);frame({32,583,752,160},false);
         chromeValid=true;
     }
     g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
-#if DUCK_ENABLE_OPENGL
-    juce::Graphics::ScopedSaveState clip(g);
-    if(glowRenderer&&glowRenderer->ready.load()&&glowRenderer->presented.load()&&!capturingBlur&&bypassMix<.5f){
-        // Component painting overlays OpenGL. Transparent plot apertures expose
-        // the GPU-rendered glass/grid/glow; crisp CPU cores remain above it.
-        g.excludeClipRegion(scaled(50,423,700,107));g.excludeClipRegion(scaled(50,610,700,107));
-    }
-#endif
-    // Keep one expanded-height chrome cache. Folding clips the bottom; it never
-    // stretches the graph bed or regenerates top materials at the same width/DPI.
-    // Use the cached image's actual pixel aspect, avoiding an extra fractional
-    // Y scale on CoreGraphics when width*905/800 rounds to physical pixels.
     g.fillAll(look.tokens().chassis);
     const juce::Image* background=&chrome;
 #if JUCE_WINDOWS
@@ -621,32 +584,7 @@ void DuckPocketAudioProcessorEditor::paintDynamicLabels(juce::Graphics& g){
 }
 
 void DuckPocketAudioProcessorEditor::paint(juce::Graphics& g){
-    ++paintCount;paintChrome(g);juce::Graphics::ScopedSaveState save(g);g.addTransform(juce::AffineTransform::scale(float(getWidth())/800));
-
-#if DUCK_ENABLE_OPENGL
-    if(glowRenderer&&glowRenderer->ready.load()&&!capturingBlur&&bypassMix<.5f){
-        if(g.clipRegionIntersects({50,423,700,107})||g.clipRegionIntersects({50,610,700,107})){
-        auto frame=std::make_shared<PocketGlowRenderer::Frame>();frame->width=getWidth();frame->height=getHeight();frame->chromeRevision=chromeBuildCount;frame->time=displayTime;frame->frozen=gainFrozen||scopeFrozen;frame->rasterScale=g.getInternalContext().getPhysicalPixelScaleFactor();
-        for(int i=0;i<2;++i){const float y=i?583.f:396.f;const juce::Rectangle<float> plot(50,y+27,700,107);auto& layer=frame->plots[size_t(i)];
-            if(!g.clipRegionIntersects(plot.toNearestInt())&&lastGpuFrame&&lastGpuFrame->chromeRevision==frame->chromeRevision){layer=lastGpuFrame->plots[size_t(i)];continue;}
-            layer.bounds=scaled(50,y+27,700,107);
-            const float device=float(chrome.getWidth())/float(getWidth());auto crop=(layer.bounds.toFloat()*device).toNearestInt().getIntersection(chrome.getBounds());layer.background=chrome.getClippedImage(crop);
-            const float coreScale=g.getInternalContext().getPhysicalPixelScaleFactor();
-            layer.core=juce::Image(juce::Image::ARGB,juce::jmax(1,juce::roundToInt(plot.getWidth()*coreScale)),juce::jmax(1,juce::roundToInt(plot.getHeight()*coreScale)),true,juce::SoftwareImageType());
-            juce::Graphics cg(layer.core);cg.addTransform(juce::AffineTransform::translation(-plot.getX(),-plot.getY()).scaled(coreScale));
-            graph(cg,{32,y,752,160},i==0);layer.intensity=0.f;
-        }
-        lastGpuFrame=frame;glowRenderer->publish(std::move(frame));
-        }
-    }else
-#endif
-    {for(int i=0;i<2;++i){const float y=i?583.f:396.f;const juce::Rectangle<float> plot(50,y+27,700,107);if(!g.clipRegionIntersects(plot.toNearestInt()))continue;
-        // On Windows use the native Graphics context directly, rather than
-        // uploading offscreen cores and compositing a full-DPI bloom on CPU.
-        graph(g,{32,y,752,160},i==0);
-    }}
-    if(triggerStamp>=0&&!gainFrozen){const float flash=1.f-float((juce::Time::getMillisecondCounterHiRes()-triggerStamp)/180.);if(flash>0){g.setColour(look.tokens().out.withAlpha(flash*.45f));g.fillRect(748.f,423.f,2.f,107.f);}}
-    if(filtersExpanded&&g.clipRegionIntersects({48,792,704,100}))paintDynamicLabels(g);
+    ++paintCount;paintChrome(g);
 }
 void DuckPocketAudioProcessorEditor::captureBlurSnapshot(){
     if(capturingBlur||blurArea.isEmpty())return;
@@ -714,7 +652,7 @@ void DuckPocketAudioProcessorEditor::parentHierarchyChanged(){
     }
 #endif
 #if DUCK_ENABLE_OPENGL && ! JUCE_WINDOWS
-    if(getPeer()&&preferences&&preferences->getBoolValue("richPocket.ui.opengl.v3",false)&&!glowRenderer)setOpenGL(true,false);
+    // Compact editor uses the host renderer; no graph OpenGL surface.
 #endif
 }
 #if JUCE_WINDOWS
@@ -758,76 +696,21 @@ void DuckPocketAudioProcessorEditor::frameTick(){
         if(!showActivation)activationPanel.backdrop={};
     }
     activateButton.setEnabled(!audioProcessor.onlineActivationBusy());
-    {const auto message=audioProcessor.onlineActivationMessage();if(message.isNotEmpty()&&message!=lastOnlineMessage){lastOnlineMessage=message;activationStatus.setText(message,juce::dontSendNotification);}}
+    const auto message=audioProcessor.onlineActivationMessage();
+    if(message.isNotEmpty()&&message!=lastOnlineMessage){lastOnlineMessage=message;activationStatus.setText(message,juce::dontSendNotification);}
     if(showActivation){
         if(activationBackdropDirty&&(resizeStamp==0||juce::Time::getMillisecondCounterHiRes()-resizeStamp>100))captureActivationBackdrop();
-        PocketTrace discard;while(audioProcessor.popTrace(discard)){}
         return;
     }
-    listenButton.setToggleState(audioProcessor.listenSidechain.load(),juce::dontSendNotification);
-#if DUCK_ENABLE_OPENGL
-    if(glowRenderer){const bool readyGL=glowRenderer->ready.load();if(readyGL&&!glWasReady){glWasReady=true;repaint();}
-        if(glowRenderer->failed.load()||(!readyGL&&juce::Time::getMillisecondCounterHiRes()-glAttachTime>2000)){setOpenGL(false);}}
-#endif
     if(resizeStamp>0&&juce::Time::getMillisecondCounterHiRes()-resizeStamp>400)saveSize();
-    if(triggerStamp>=0){repaint(gainArea);if(juce::Time::getMillisecondCounterHiRes()-triggerStamp>=180)triggerStamp=-1;}
-
     if(!chromeValid&&resizeStamp>0&&juce::Time::getMillisecondCounterHiRes()-resizeStamp>100)repaint();
-    const auto epoch=audioProcessor.traceGeneration.load(std::memory_order_relaxed);
-    if(epoch!=traceGeneration){traceGeneration=epoch;cursor=filled=summaryCursor=summaryFilled=0;summaryBin=-1;displayTime=lastClock=lastLatest=lastPacketClock=gapMax=0;gainResume=scopeResume=0;lastPaintedTime=-1;lastVisibleSignalTime=-1;signalPeak=currentReduction=0;for(auto& layer:softwarePlots)layer.reset();
-#if DUCK_ENABLE_OPENGL
-        for(auto& phosphor:gpuPhosphor)phosphor.reset();
-#endif
-        triggerStamp=-1;repaint(gainArea);repaint(scopeArea);}
-    PocketTrace v;bool fresh=false;const float previousPeak=signalPeak;float framePeak=0;
-    // Bound each GUI callback even when an audio producer keeps replenishing
-    // the FIFO (e.g. fast offline processing). Never drain an open-ended queue.
-    for(int drained=0;drained<8192&&audioProcessor.popTrace(v);++drained){
-        if(v.generation!=traceGeneration||!std::isfinite(v.time))continue;
-        history[size_t(cursor)]=v;cursor=(cursor+1)%historyCapacity;filled=juce::jmin(filled+1,historyCapacity);
-        const auto bin=static_cast<long long>(std::floor(v.time*500.));
-        if(bin!=summaryBin){summaryBin=bin;summaryHistory[size_t(summaryCursor)]=v;summaryCursor=(summaryCursor+1)%summaryCapacity;summaryFilled=juce::jmin(summaryFilled+1,summaryCapacity);}
-        else {auto& s=summaryHistory[size_t((summaryCursor+summaryCapacity-1)%summaryCapacity)];s.keyLo=juce::jmin(s.keyLo,v.keyLo);s.keyHi=juce::jmax(s.keyHi,v.keyHi);s.outLo=juce::jmin(s.outLo,v.outLo);s.outHi=juce::jmax(s.outHi,v.outHi);s.gain=juce::jmin(s.gain,v.gain);s.time=v.time;}
-        if(1.f-v.gain-currentReduction>.035f){const auto stamp=juce::Time::getMillisecondCounterHiRes();if(triggerStamp<0||stamp-triggerStamp>180)triggerStamp=stamp;}
-        signalPeak=juce::jmax(std::abs(v.keyLo),std::abs(v.keyHi),std::abs(v.outLo),std::abs(v.outHi));currentReduction=1.f-v.gain;
-        framePeak=juce::jmax(framePeak,signalPeak);if(signalPeak>.004f||currentReduction>.001f)lastVisibleSignalTime=v.time;
-        fresh=true;
-    }
-    if(fresh)signalPeak=juce::jmax(framePeak,previousPeak*.78f);
-    if(filled>0){
-        // Display clock: runs on wall-clock time and is gently steered towards the
-        // newest audio timestamp minus a small safety lag. Audio arrives in bursts
-        // (one block at a time); following it directly made the scroll speed uneven.
-        const double latest=history[size_t((cursor+historyCapacity-1)%historyCapacity)].time;
-        const double clock=juce::Time::getMillisecondCounterHiRes()*.001;
-        const double dt=lastClock>0.?juce::jlimit(0.,.1,clock-lastClock):0.;lastClock=clock;
-        const bool resumed=fresh&&(lastPacketClock<=0.||clock-lastPacketClock>.1);
-        if(fresh){if(resumed)gapMax=0.;else if(lastLatest>0.)gapMax=juce::jmax(latest-lastLatest,gapMax*.995);lastLatest=latest;lastPacketClock=clock;}
-        const double target=juce::jmax(0.,latest-(resumed?0.:juce::jlimit(0.,.02,gapMax*.5)));
-        if(resumed||displayTime<=0.||std::abs(target-displayTime)>.4)displayTime=target;
-        else{displayTime+=dt;displayTime+=(target-displayTime)*.06;}
-        displayTime=juce::jmin(displayTime,latest);
-    }
-    // Audio only invalidates the plots: the Influence dial has no live meter.
     const bool target=audioProcessor.parameters.getRawParameterValue("bypass")->load()>.5f||audioProcessor.displayBypass.load();
     if(target!=bypassTarget){
         bypassTarget=target;
-        for(auto* c:{static_cast<juce::Component*>(&sidechainRange),static_cast<juce::Component*>(&processingRange),static_cast<juce::Component*>(&midSide),static_cast<juce::Component*>(&listenButton)})c->setEnabled(!target);
-        if(target){captureBlurSnapshot();bypassMix=1;}else{bypassMix=0;blurredSnapshot=juce::Image();}
-        repaint();return;
+        for(auto* dial:{&influence,&duration,&attack,&midSide,&inputDial,&outputDial})dial->setEnabled(!target);
+        if(target){captureBlurSnapshot();bypassMix=1;}else{bypassMix=0;blurredSnapshot={};}
+        repaint();
+    }else if(bypassMix>0&&!blurredSnapshot.isValid()&&(resizeStamp==0||juce::Time::getMillisecondCounterHiRes()-resizeStamp>100)){
+        captureBlurSnapshot();repaint(blurArea);
     }
-    // Repaint the two plot rectangles only, and skip a frozen graph entirely.
-    if(bypassMix>0){
-        if(!blurredSnapshot.isValid()&&(resizeStamp==0||juce::Time::getMillisecondCounterHiRes()-resizeStamp>100)){
-            captureBlurSnapshot();repaint(blurArea);
-        }
-        return;
-    }
-    const bool moved=std::abs(displayTime-lastPaintedTime)>1e-7;
-    if(!fresh&&!moved)return;
-    if(fresh&&signalPeak<=.004f&&currentReduction<=.001f&&displayTime-lastVisibleSignalTime>gainWindow+.2)return;
-    lastPaintedTime=displayTime;
-    if(!gainFrozen)repaint(gainArea);
-    if(!scopeFrozen)repaint(scopeArea);
 }
-
