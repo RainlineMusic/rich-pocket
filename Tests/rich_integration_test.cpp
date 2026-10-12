@@ -10,10 +10,14 @@ struct DuckUiTestAccess {
   juce::Component* controls[]{&e.influence,&e.duration,&e.attack,&e.midSide,&e.inputDial,&e.outputDial,&e.settingsButton,&e.bypassButton};
   for(auto* c:controls)if(!c->isVisible()||!e.getLocalBounds().contains(c->getBounds()))return false;
   for(size_t i=0;i<8;++i)for(size_t j=i+1;j<8;++j)if(controls[i]->getBounds().intersects(controls[j]->getBounds()))return false;
-  return !e.activationPanel.isVisible()&&e.influence.getMaximum()==100&&e.inputDial.getMinimum()==-12&&e.outputDial.getMaximum()==12;
+  return !e.freezeButton.isVisible()&&e.gainArea.isEmpty()&&e.scopeArea.isEmpty()&&!e.activationPanel.isVisible()&&e.influence.getMaximum()==100&&e.inputDial.getMinimum()==-12&&e.outputDial.getMaximum()==12;
  }
 };
 void check(bool ok,const char* msg){if(!ok){std::cerr<<"FAIL: "<<msg<<'\n';std::exit(1);}}
+void saveImage(const juce::Image& image,const juce::File& file){
+ if(file.existsAsFile())check(file.deleteFile(),"replace old UI capture");
+ auto stream=file.createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"UI capture");
+}
 void set(DuckPocketAudioProcessor& p,const char* id,float value){auto* param=p.parameters.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));}
 int main(int argc,char** argv){
  std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
@@ -53,8 +57,8 @@ int main(int argc,char** argv){
  p.prepareToPlay(48000.,128);std::unique_ptr<DuckPocketAudioProcessorEditor> editor(static_cast<DuckPocketAudioProcessorEditor*>(p.createEditor()));
  juce::File output=argc>1?juce::File(argv[1]):juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("rich-ui-captures");check(output.createDirectory().wasOk(),"create UI capture directory");std::cout<<"UI captures: "<<output.getFullPathName()<<"\n";
  const char* themes[]{"dark","neon","amber"};PocketTheme values[]{PocketTheme::SolidDark,PocketTheme::Neon,PocketTheme::Amber};
- for(int t=0;t<3;++t){DuckUiTestAccess::theme(*editor,values[t]);for(int width:{400,800,1200}){editor->setSize(width,juce::roundToInt(width*792./800.));check(DuckUiTestAccess::layout(*editor),"six dials fit without overlap");auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());auto stream=output.getChildFile(juce::String(themes[t])+"-"+juce::String(width)+".png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"UI capture");}}
+ for(int t=0;t<3;++t){DuckUiTestAccess::theme(*editor,values[t]);for(int width:{400,800,1200}){editor->setSize(width,juce::roundToInt(width*320./800.));check(DuckUiTestAccess::layout(*editor),"six dials fit without overlap");auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());saveImage(image,output.getChildFile(juce::String(themes[t])+"-"+juce::String(width)+".png"));}}
  set(p,"bypass",1);juce::AudioBuffer<float> b(2,128);for(int block=0;block<40;++block){b.clear();p.processBlock(b,midi);}DuckUiTestAccess::tick(*editor);
- {auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());auto stream=output.getChildFile("bypass.png").createOutputStream();check(stream&&juce::PNGImageFormat().writeImageToStream(image,*stream),"bypass capture");}
+ {auto image=pocket::softwareSnapshot(*editor,editor->getLocalBounds());saveImage(image,output.getChildFile("bypass.png"));}
  std::cout<<"Rich integration and UI checks passed\n";
 }
